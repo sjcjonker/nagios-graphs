@@ -45,9 +45,9 @@ for the required check setup.
 ```sh
 python3 scripts/generate-interface-graphs.py --config-dir /etc/nagios4 \
   --catalog-base /etc/nagios4/graphs/base.json \
-  --seed /etc/nagios4/graphs/interface-archives.json \
   --output /var/lib/nagios-graphs/catalog.json
 ```
+Add --seed /path/to/interface-archives.json only when preserving existing archive mappings.
 
 The output is runtime state. Keep static configuration under `/etc`, executable
 code under `/usr/local/libexec`, and generated catalogs/archives under `/var/lib`.
