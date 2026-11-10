@@ -21,14 +21,14 @@
 
 - [x] Review all 31 tracked text files at `e691a89` for internal hostnames,
       addresses, credentials and private paths; no additional private values found.
-- [ ] Visually recheck the two shipped PNGs and their metadata before publication.
+- [x] Visually recheck the two shipped PNGs and their metadata before publication.
 - [x] Identify the removed internal hostname in the original hover test history;
       commit author addresses use GitHub noreply addresses.
 - [x] Preserve a reviewed local snapshot before deleting/recreating the repository.
 - [x] Import that snapshot into the empty private repository with one new root commit;
       do not push old branches, tags or history.
 - [x] Verify the repository About description and topics.
-- [ ] Prepare the initial version tag and concise release notes, including requirements,
+- [x] Prepare the initial version tag and concise release notes, including requirements,
       manual setup, tested scope and known limitations.
 - [x] Full CI passed for code revision `8ddd4ae` (run `42834675276`). Repeat the full staged test only
       if runtime, examples or packaging changed after `e691a89`; checklist-only edits
