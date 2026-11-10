@@ -1,0 +1,11 @@
+[Unit]
+Description=Drain queued Nagios perfdata once per minute
+
+[Timer]
+OnCalendar=*:0/1
+Persistent=true
+AccuracySec=10s
+Unit=nagios-rrd-drain.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,61 @@
+name: Tests
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    name: Minimal checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check Python syntax
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import subprocess
+
+          paths = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+          checked = 0
+          for name in paths:
+              path = pathlib.Path(name)
+              if not name or path.is_symlink() or not path.is_file():
+                  continue
+              if path.suffix != ".py" and not (
+                  path.suffix == ".cgi" and b"python" in path.read_bytes().split(b"\n", 1)[0]
+              ):
+                  continue
+              compile(path.read_bytes(), str(path), "exec")
+              checked += 1
+          if not checked:
+              raise SystemExit("No Python sources checked")
+          print(f"Python syntax OK: {checked} files")
+          PY
+      - name: Check JavaScript syntax and graph interactions
+        run: |
+          node --check scripts/nagios-rrd-hover.js
+          node tests/test_nagios_rrd_drag.js
+          node tests/test_nagios_rrd_hover.js
+
+      - name: Full runtime and real RRD release validation
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rrdtool fonts-dejavu-core
+          python3 -m unittest discover -s tests -v
+
+      - name: Staged installation smoke test
+        if: github.event_name == 'workflow_dispatch'
+        run: python3 tools/test-staged-install.py

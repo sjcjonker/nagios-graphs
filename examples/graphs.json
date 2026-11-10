@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "nagios_url": "/nagios4/",
+  "metrics": [
+    {"id": "temperature", "host": "server01", "service": "Temperature", "metric": "temperature_c", "type": "GAUGE_SIGNED"},
+    {"id": "rx", "host": "switch01", "service": "Uplink", "metric": "rx_bytes", "type": "COUNTER"},
+    {"id": "tx", "host": "switch01", "service": "Uplink", "metric": "tx_bytes", "type": "COUNTER"}
+  ],
+  "graphs": [
+    {"id": "server-temperature", "title": "Server temperature", "unit": "°C", "lines": [
+      {"metric": "temperature", "label": "Temperature", "color": "#1682B2"}
+    ]},
+    {"id": "uplink", "title": "Switch uplink", "unit": "Mbit/s", "lower": 0, "lines": [
+      {"metric": "rx", "label": "Inbound", "color": "#1682B2", "scale": 0.000008},
+      {"metric": "tx", "label": "Outbound", "color": "#D97706", "scale": 0.000008}
+    ]}
+  ]
+}

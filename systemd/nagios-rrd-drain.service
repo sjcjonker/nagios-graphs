@@ -1,0 +1,21 @@
+[Unit]
+Description=Import queued Nagios perfdata to local RRD archives
+Documentation=man:rrdtool(1)
+ConditionPathIsDirectory=/var/spool/nagios-graphs
+
+[Service]
+Type=oneshot
+User=nagios
+Group=nagios
+UMask=0027
+ExecStart=/usr/bin/python3 /usr/local/libexec/nagios-rrd-drain.py --spool /var/spool/nagios-graphs --importer /usr/local/libexec/nagios-rrd-import.py --rrd-dir /var/lib/nagios-graphs/rrd
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/spool/nagios-graphs /var/lib/nagios-graphs
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
