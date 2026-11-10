@@ -33,8 +33,8 @@
 - [x] Full CI passed for code revision `8ddd4ae` (run `42834675276`). Repeat the full staged test only
       if runtime, examples or packaging changed after `e691a89`; checklist-only edits
       do not invalidate the recorded result.
-- [ ] Change repository visibility from private to public after the final review.
-- [ ] Publish the versioned GitHub release.
+- [x] Change repository visibility from private to public after the final review.
+- [x] Publish the versioned GitHub release.
 - [ ] Submit the public repository/release to Nagios Exchange.
 
 The agreed publication plan is to recreate the repository after preserving the
