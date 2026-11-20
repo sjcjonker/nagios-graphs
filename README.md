@@ -22,6 +22,12 @@ An administrator-owned JSON catalog declares exact allowed metrics, archive iden
 graph lines, units, conversions, signed values, dual axes and gap overlays.
 Missing or invalid configuration fails closed; there is no built-in host catalog.
 
+## Release v0.2.0
+
+See [the release notes](CHANGELOG.md) for graph improvements and upgrade details.
+Existing v0.1.0 archives require a coordinated filename migration; this is not
+a drop-in file replacement. See [the upgrade guide](docs/install.md#upgrade-from-v010-migrate-rrd-filenames).
+
 ## Setup
 
 Requires Linux, Python 3.9+, RRDTool, systemd and an authenticated CGI-capable web
@@ -73,8 +79,9 @@ node tests/test_nagios_rrd_drag.js
 node tests/test_nagios_rrd_hover.js
 ```
 
-Real-RRD tests skip without `rrdtool`. Manual GitHub Actions dispatch installs it
-and runs the full suite. Ordinary PR CI retains minimal syntax/interaction checks.
+Real-RRD tests skip locally without `rrdtool`. Every code PR installs it in
+GitHub Actions and runs the full Python and interaction suites, including the
+staged installation smoke test.
 
 ## License and authorship
 

@@ -65,13 +65,70 @@ def identifier(host: str, service: str, key: str) -> str:
     metric = catalog["metric_for"](host, service, key)
     if metric is None:
         raise ValueError("Unknown metric")
-    return catalog["archive_id"](metric)
+    return catalog["archive_filename"](metric)
 
 
-def rrd_create(path: Path, data_type: str, rrdtool: str, heartbeat: int, timestamp: int) -> None:
+def sensor_bounds(metric: dict) -> tuple[float | None, float | None]:
+    """Conservative unit-specific defaults, overridable by explicit catalog bounds.
+
+    Only apply limits when the metric and service identify the measurement unit.
+    Ambiguous disk, memory, water, power and load measurements are left alone.
+    """
+    key = metric["metric"]
+    service = metric["service"].lower()
+    percent = {"battery_pct", "cpu_usage_pct", "spare_pct", "wear_pct",
+               "arc_hit_pct", "capacity_pct", "free_pct", "wifi_strength"}
+    if key in percent or (key in {"battery", "load"} and "ups" in service):
+        return 0, 100
+    if key == "Humidity:" and "humidity" in service:
+        return 0, 100
+    if key in {"wifi_rssi_db", "rssi_dbm"}:
+        return -120, 0
+    if key in {"input_voltage", "voltage"} and "ups" in service:
+        return 0, 300
+    if key in {"voltage_l1_v", "voltage_l2_v", "voltage_l3_v"}:
+        return 0, 300
+    if key in {"cpu_temp_c", "nvme_temp_c", "pch_temp_c", "temperature_c"}:
+        return -40, 150
+    if key == "Temperature:" and "temperature" in service:
+        return -40, 150
+    if key in {"current_l1_a", "current_l2_a", "current_l3_a",
+               "flow_lpm", "average_flow_Lpm", "water_L_interval",
+               "import_kWh_interval", "export_kWh_interval",
+               "disk_read_ms", "disk_write_ms", "total_read_ms", "total_write_ms",
+               "scrub_age_hours", "arc_max_bytes", "arc_size_bytes",
+               "FreeMem", "FreeSwap", "TotalMem", "TotalSwap",
+               "average_import_kW", "average_import_w", "power_w",
+               "swap", "1minLoad", "5minLoad", "15minLoad",
+               "load1", "load5", "load15"}:
+        return 0, None
+    return None, None
+
+
+def metric_bounds(metric: dict, values: dict) -> tuple[float | None, float | None]:
+    """Bounds are rates for COUNTER, native units for GAUGE."""
+    default_low, default_high = sensor_bounds(metric)
+    lower = metric.get('min_value', default_low)
+    upper = metric.get('max_value', default_high)
+    key = metric['metric']
+    if metric['type'] == 'COUNTER' and key.endswith(('_in_octet', '_out_octet')):
+        prefix = key.rsplit('_', 2)[0]
+        speed = values.get(prefix + '_speed_bps')
+        if speed is not None and math.isfinite(speed) and speed > 0:
+            speed_limit = speed / 8 * 1.05
+            upper = min(upper, speed_limit) if upper is not None else speed_limit
+    return lower, upper
+
+
+def rrd_create(path: Path, data_type: str, rrdtool: str, heartbeat: int, timestamp: int,
+               lower: float | None = None, upper: float | None = None) -> None:
+    low = 'U' if lower is None else format(lower, '.12g')
+    high = 'U' if upper is None else format(upper, '.12g')
+    if data_type != 'GAUGE_SIGNED' and lower is None:
+        low = '0'
     subprocess.run([rrdtool, "create", str(path), "--step", str(DEFAULT_STEP),
                     "--start", str(timestamp - 1),
-                    f"DS:value:GAUGE:{heartbeat}:U:U" if data_type == "GAUGE_SIGNED" else f"DS:value:{data_type}:{heartbeat}:0:U",
+                    f"DS:value:GAUGE:{heartbeat}:{low}:{high}" if data_type == "GAUGE_SIGNED" else f"DS:value:{data_type}:{heartbeat}:{low}:{high}",
                     "RRA:AVERAGE:0.5:1:1440", "RRA:AVERAGE:0.5:5:2016",
                     "RRA:AVERAGE:0.5:60:8760"], check=True)
 
@@ -103,11 +160,12 @@ def import_batch(source: Path, destination: Path, rrdtool: str = "rrdtool") -> t
                     continue
                 catalog = configured_catalog()
                 configured_metric = catalog["metric_for"](host, service, key)
-                path = destination / f"{identifier(host, service, key)}.rrd"
+                path = destination / identifier(host, service, key)
                 if not path.exists():
+                    lower, upper = metric_bounds(configured_metric, metrics)
                     rrd_create(path, kind, rrdtool,
                                configured_metric["heartbeat"],
-                               timestamp)
+                               timestamp, lower, upper)
                 # Values outside monotonic RRD time ordering should be rejected,
                 # not counted as a successful import.
                 sample = ('U' if value is None else

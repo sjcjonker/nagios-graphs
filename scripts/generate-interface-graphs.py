@@ -44,31 +44,49 @@ def objects(root: Path):
             yield kind, fields
 
 
-def generate(root: Path, seed: Path | None = None, exclude_hosts=()) -> list[dict]:
+def resolved_services(root: Path):
+    """Use one inheritance policy for interface generation and polling metadata."""
     definitions = list(objects(root))
-    templates = {row["name"]: row for kind, row in definitions
-                 if kind == "service" and "name" in row}
+    templates = {row['name']: row for kind, row in definitions
+                 if kind == 'service' and 'name' in row}
 
     def resolve(row, seen=()):
-        result = {}
+        merged = {}
         # Nagios gives the first template precedence over later templates.
-        for name in reversed(row.get("use", "").split(",")):
+        for name in reversed(row.get('use', '').split(',')):
             name = name.strip()
             if not name:
                 continue
             if name in seen or name not in templates:
-                raise ValueError("unknown or cyclic service template: " + name)
-            result.update(resolve(templates[name], (*seen, name)))
-        result.update(row)
-        return result
+                raise ValueError('unknown or cyclic service template: ' + name)
+            merged.update(resolve(templates[name], (*seen, name)))
+        merged.update(row)
+        return merged
 
+    for kind, raw in definitions:
+        if kind == 'service' and raw.get('register') != '0':
+            yield resolve(raw)
+
+
+def polling_interval(row, default=None):
+    """Convert Nagios minutes to whole seconds consistently, including fractions."""
+    value = row.get('check_interval', default)
+    if value is None:
+        return None
+    try:
+        seconds = round(float(value) * 60)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError('invalid check interval for ' + row.get('service_description', 'service')) from None
+    if not 60 <= seconds <= 604800:
+        raise ValueError('invalid check interval for ' + row.get('service_description', 'service'))
+    return seconds
+
+
+def generate(root: Path, seed: Path | None = None, exclude_hosts=()) -> list[dict]:
     legacy = {(row["host"], row["metric_in"]): row
               for row in (json.loads(seed.read_text()) if seed else [])}
     result, identities, keys = [], set(), set()
-    for kind, raw in definitions:
-        if kind != "service" or raw.get("register") == "0":
-            continue
-        row = resolve(raw)
+    for row in resolved_services(root):
         parts = row.get("check_command", "").split("!")
         if parts[0] not in SNMP | {"check_local_interface"}:
             continue
@@ -103,19 +121,55 @@ def generate(root: Path, seed: Path | None = None, exclude_hosts=()) -> list[dic
             if key in keys:
                 raise ValueError("duplicate graph key: " + key)
             keys.add(key)
+            interval = polling_interval(row, default='15')
+            maximum = row.get('_GRAPH_MAX_BPS')
+            if maximum is not None and (not re.fullmatch(r'[0-9]+', maximum) or int(maximum) <= 0):
+                raise ValueError('invalid _GRAPH_MAX_BPS for ' + service)
+            fault_max = row.get('_GRAPH_MAX_FAULTS_PPS')
+            if fault_max is not None and (not re.fullmatch(r'[0-9]+', fault_max) or int(fault_max) <= 0):
+                raise ValueError('invalid _GRAPH_MAX_FAULTS_PPS for ' + service)
             result.append(dict(key=key, host=host, service=service,
+                               poll_interval_seconds=interval,
                                metric_in=interface + "_in_octet", metric_out=interface + "_out_octet",
                                title=host + " — " + service,
                                archive_service=old.get("archive_service", old["service"]) if old
                                else "Interface " + interface))
+            if maximum is not None:
+                result[-1]['max_bps'] = int(maximum)
+            if fault_max is not None:
+                result[-1]['max_faults_pps'] = int(fault_max)
     return sorted(result, key=lambda row: (row["host"], row["metric_in"]))
 
 
-def catalog(base: dict, interfaces: list[dict]) -> dict:
+def service_intervals(root: Path) -> dict[tuple[str, str], int]:
+    """Resolve effective Nagios intervals, including inherited templates."""
+    intervals = {}
+    for row in resolved_services(root):
+        if not row.get('host_name') or not row.get('service_description'):
+            continue
+        seconds = polling_interval(row)
+        if seconds is None:
+            continue
+        for host in row['host_name'].split(','):
+            intervals[(host.strip(), row['service_description'])] = seconds
+    return intervals
+
+
+def catalog(base: dict, interfaces: list[dict], intervals=None) -> dict:
     """Add explicit counter metrics and graphs to an administrator-owned base."""
     import copy
     result = copy.deepcopy(base)
+    for metric in result['metrics']:
+        interval = (intervals or {}).get((metric['host'], metric['service']))
+        if interval is not None:
+            metric['poll_interval_seconds'] = interval
     for row in interfaces:
+        # Fault counters are Counter32, even when traffic uses Counter64.
+        # Above half the counter space per poll, resets and wraps are ambiguous.
+        # This is a reset guard, not a claim about physical packet capacity.
+        fault_max = row.get('max_faults_pps', 2**31 / row['poll_interval_seconds'])
+        if isinstance(fault_max, bool) or not isinstance(fault_max, (int, float)) or not 0 < fault_max < float('inf'):
+            raise ValueError('invalid max_faults_pps')
         refs = {}
         prefix = row['metric_in'].removesuffix('_in_octet')
         for direction in ('in', 'out'):
@@ -125,7 +179,16 @@ def catalog(base: dict, interfaces: list[dict]) -> dict:
                 key = 'interface-' + hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:32]
                 refs[(direction, kind)] = key
                 result['metrics'].append(dict(id=key, host=row['host'], service=row['service'], metric=metric,
-                                               type='COUNTER', archive_service=row.get('archive_service', row['service'])))
+                                               type='COUNTER', archive_service=row.get('archive_service', row['service']),
+                                               poll_interval_seconds=row['poll_interval_seconds']))
+                if kind == 'octet' and 'max_bps' in row:
+                    maximum = row['max_bps']
+                    if type(maximum) is not int or maximum <= 0:
+                        raise ValueError('invalid max_bps')
+                    # RRD COUNTER maxima are rates in native bytes/second.
+                    result['metrics'][-1].update(min_value=0, max_value=maximum / 8 * 1.05)
+                elif kind in ('error', 'discard'):
+                    result['metrics'][-1].update(min_value=0, max_value=fault_max)
         lines = [dict(metric=refs[(d, 'octet')], label=label, color=color, scale=0.000008)
                  for d, label, color in (('in', 'Inbound', '#1682B2'), ('out', 'Outbound', '#D97706'))]
         faults = [('error', 'in', '#DC2626'), ('error', 'out', '#9333EA'),
@@ -134,12 +197,11 @@ def catalog(base: dict, interfaces: list[dict]) -> dict:
             lines.append(dict(metric=refs[(direction, kind)], label=f'{direction.title()} {kind}s (right)',
                               color=color, width=1, axis='right', unit='/s', optional=True))
         result['graphs'].append(dict(id=row['key'], title=row['title'], unit='Mbit/s', lower=0,
-                                     units_exponent=0, left_format='%.3lf', right_format='%.4lf',
                                      right_axis=dict(unit='Errors / discards per second', scale='auto'), lines=lines,
                                      note='Traffic: left axis (Mbit/s). Errors and discards: right axis (per second).'))
         for kind, suffix, unit in (('error', 'errors', 'Errors/s'), ('discard', 'discards', 'Discards/s')):
             result['graphs'].append(dict(id=row['key'] + '-' + suffix, title=row['title'] + ' ' + suffix,
-                                         unit=unit, lower=0, hidden=True, units_exponent=0, left_format='%.3lf',
+                                         unit=unit, lower=0, hidden=True,
                                          lines=[dict(metric=refs[(d, kind)], label=label, color=color)
                                                 for d, label, color in (('in', 'Inbound', '#1682B2'), ('out', 'Outbound', '#D97706'))]))
     return result
@@ -165,7 +227,8 @@ def main():
         parser.error('choose --stdout or --output')
     try:
         rows = generate(args.config_dir, args.seed, args.exclude_host)
-        data = catalog(json.loads(args.catalog_base.read_text()), rows) if args.catalog_base else rows
+        data = catalog(json.loads(args.catalog_base.read_text()), rows,
+                       service_intervals(args.config_dir)) if args.catalog_base else rows
         encoded = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode()
         if args.catalog_base:
             import runpy

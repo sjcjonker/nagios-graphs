@@ -1,53 +1,29 @@
-# Public release checklist
+# Release checklist
 
-## Completed preparation
+## Candidate review
 
-- [x] Explicit catalog; no built-in site names, graph rules or hover allowlists.
-- [x] Generic interface generator with optional private archive seed and exclusions.
-- [x] Generic dual axes, automatic counter scaling, optional counters and gap overlays.
-- [x] Standalone configuration examples and explicit authorization boundaries.
-- [x] Compare the private production catalog against live data in an isolated test.
-- [x] Run the real-RRD suite and migrate the existing internal installation.
-- [x] Document the personal-project scope and rough/manual installation experience.
-- [x] Add sanitized graph and hover-preview illustrations with an explicit editing disclosure.
-- [x] Replace the internal hostname in hover test fixtures (during private preparation).
-- [x] Document interface plugin sources, all six supported command definitions,
-      argument mappings and generic service examples (during private preparation).
-- [x] Run the full [staged installation test](staged-test.md) on the author's Linux installation against
-      commit `e691a89` on 2026-11-10: valid layout, RRD/CGI passed, nine archives,
-      five rendered graph views, archive data unchanged.
+- [ ] Approve the proposed version number and release notes.
+- [ ] Review the complete diff against the previous public release.
+- [ ] Review filenames, documentation, fixtures and binary metadata for
+      deployment-specific information, credentials and private paths.
+- [ ] Preserve the existing public Git history; import reviewed file changes
+      only, without merging development repository history.
+- [ ] Run the complete Python and JavaScript suites with real RRDtool.
+- [ ] Run the full [staged installation test](staged-test.md) on the exact
+      approved candidate, not only its layout-only mode.
+- [ ] Exercise the v0.1.0 filename migration and rollback on synthetic archives
+      or an independently backed-up copy; verify samples are unchanged.
+- [ ] Confirm the coordinated-upgrade instructions and documented limitations.
 
-## Publication progress
+## Publication
 
-- [x] Review all 31 tracked text files at `e691a89` for internal hostnames,
-      addresses, credentials and private paths; no additional private values found.
-- [x] Visually recheck the two shipped PNGs and their metadata before publication.
-- [x] Identify the removed internal hostname in the original hover test history;
-      commit author addresses use GitHub noreply addresses.
-- [x] Preserve a reviewed local snapshot before deleting/recreating the repository.
-- [x] Import that snapshot into the empty private repository with one new root commit;
-      do not push old branches, tags or history.
-- [x] Verify the repository About description and topics.
-- [x] Prepare the initial version tag and concise release notes, including requirements,
-      manual setup, tested scope and known limitations.
-- [x] Full CI passed for code revision `8ddd4ae` (run `42834675276`). Repeat the full staged test only
-      if runtime, examples or packaging changed after `e691a89`; checklist-only edits
-      do not invalidate the recorded result.
-- [x] Change repository visibility from private to public after the final review.
-- [x] Publish the versioned GitHub release.
-- [ ] Submit the public repository/release to Nagios Exchange.
+- [ ] Obtain approval before creating a public branch or pull request.
+- [ ] Run public CI on the reviewed candidate.
+- [ ] Merge only the reviewed patch and prepare the version tag and release.
+- [ ] Publish after final approval, with upgrade requirements prominent.
+- [ ] Submit or update the Nagios Exchange entry if desired.
 
-The agreed publication plan is to recreate the repository after preserving the
-reviewed files locally. Start the replacement with fresh Git history; deletion
-alone does not prevent an old checkout from reintroducing historical commits.
-
-## Validation scope
-
-The directory-based smoke test checks standalone packaging and runtime behavior;
-a new Nagios server is not required. It does not establish fresh-server
-compatibility, HTTP authentication, Unix account separation or systemd activation.
-The existing installation provides operational experience; the README keeps the
-limited scope explicit. Do not advertise a turnkey installer or broad platform
-certification.
-
-Consumer pin updates still require coordinated helper/catalog installation.
+No candidate checklist item implies broader platform certification. The staged
+smoke test checks copied runtime files with synthetic data; it does not validate
+web authentication, account separation, systemd activation or a fresh server.
+Consumer deployments must install matching importer, viewer and helper versions.

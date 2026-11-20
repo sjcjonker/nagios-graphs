@@ -54,8 +54,10 @@ class ConfiguredCatalogTests(unittest.TestCase):
         self.write()
         identity = ['server01', 'Old temperature', 'temperature_c']
         expected = hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:32]
-        self.assertEqual(self.importer.identifier('server01', 'Temperature', 'temperature_c'), expected)
+        self.assertEqual(self.catalog.archive_id(self.catalog.metric_for('server01', 'Temperature', 'temperature_c')), expected)
         self.assertEqual(self.web.archive_id('server01', 'Temperature', 'temperature_c'), expected)
+        self.assertEqual(self.importer.identifier('server01', 'Temperature', 'temperature_c'),
+                         self.catalog.archive_filename(self.catalog.metric_for('server01', 'Temperature', 'temperature_c')))
 
     def test_invalid_or_missing_selected_config_fails_closed(self):
         self.path.unlink()
@@ -88,7 +90,7 @@ class ConfiguredCatalogTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             self.web.graph_command('uplink', 'day', self.root)
         for metric in self.catalog.load()['metrics'].values():
-            (self.root / (self.catalog.archive_id(metric) + '.rrd')).touch()
+            (self.root / (self.catalog.archive_filename(metric))).touch()
         args = self.web.graph_command('uplink', 'day', self.root)
         self.assertIn('CDEF:line0=line0_raw,8e-06,*', args)
         self.assertIn('LINE2:line1#D97706:Outbound', args)
@@ -99,6 +101,18 @@ class ConfiguredCatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.web.parse_selection('view=home')
 
+    def test_hourly_periods_and_four_hour_default(self):
+        self.assertEqual(self.web.parse_selection('view=uplink')[1], '4hour')
+        self.assertEqual(self.web.parse_selection('view=uplink&period=hour')[1], 'hour')
+        for hours in range(1, 25):
+            for suffix in ('hour', 'hours'):
+                period = f'{hours}{suffix}'
+                self.assertEqual(self.web.parse_selection(f'view=uplink&period={period}')[1], period)
+                self.assertEqual(self.web.PERIODS[period][1], hours * 3600)
+        for invalid in ('0hour', '25hour', '999999hour', '4hourx', '-1hour'):
+            with self.subTest(period=invalid), self.assertRaises(ValueError):
+                self.web.parse_selection(f'view=uplink&period={invalid}')
+
     def test_configured_heartbeat_and_signed_archive(self):
         self.config['metrics'][0]['heartbeat'] = 7200
         self.write()
@@ -106,7 +120,7 @@ class ConfiguredCatalogTests(unittest.TestCase):
         batch.write_text('1791828000\tserver01\tTemperature\ttemperature_c=-5\n')
         with mock.patch.object(self.importer.subprocess, 'run', return_value=mock.Mock(returncode=0)) as run:
             self.assertEqual(self.importer.import_batch(batch, self.root / 'rrd'), (1, 0))
-        self.assertIn('DS:value:GAUGE:7200:U:U', run.call_args_list[0].args[0])
+        self.assertIn('DS:value:GAUGE:7200:-40:150', run.call_args_list[0].args[0])
 
     def test_missing_config_never_creates_archive_directory(self):
         self.path.unlink()
@@ -132,7 +146,7 @@ class ConfiguredCatalogTests(unittest.TestCase):
         destination = self.root / 'rrd'
         destination.mkdir()
         archive = self.importer.identifier('server01', 'Temperature', 'temperature_c')
-        (destination / (archive + '.rrd')).touch()
+        (destination / archive).touch()
         for last, expected in (('1791828000', (0, 0)), ('1791827999', (0, 1))):
             responses = [mock.Mock(returncode=1, stderr='illegal attempt to update', stdout=''),
                          mock.Mock(returncode=0, stdout=last)]

@@ -46,7 +46,7 @@ for (const query of [
   assert.equal(test.tip.style.display, 'block');
   const preview = new URL(test.image.src);
   assert.equal(preview.searchParams.get('format'), 'png');
-  assert.equal(preview.searchParams.get('period'), 'hour');
+  assert.equal(preview.searchParams.get('period'), '4hour');
   assert.ok(preview.searchParams.has('preview'));
   for (const name of ['host', 'service']) {
     assert.equal(preview.searchParams.get(name), input.searchParams.get(name));

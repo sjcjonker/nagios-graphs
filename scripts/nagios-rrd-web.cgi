@@ -36,8 +36,13 @@ def configured_catalog():
 
 _catalog_module = None
 RRD_DIR = Path(os.environ.get("NAGIOS_GRAPHS_RRD_DIR", "/var/lib/nagios-graphs/rrd"))
-PERIODS = {"hour": ("1 hour", 3600), "day": ("24 hours", 86400), "week": ("7 days", 604800),
+PERIODS = {"hour": ("1 hour", 3600),
+           **{f"{n}hour": (f"{n} hours" if n != 1 else "1 hour", n * 3600) for n in range(1, 25)},
+           **{f"{n}hours": (f"{n} hours" if n != 1 else "1 hour", n * 3600) for n in range(1, 25)},
+           "day": ("24 hours", 86400), "week": ("7 days", 604800),
            "month": ("30 days", 2592000), "year": ("1 year", 31536000)}
+# Keep the toolbar compact; explicit ?period=Nhour(s) accepts 1 through 24.
+PERIOD_CHOICES = ("hour", "2hour", "3hour", "4hour", "6hour", "12hour", "day", "week", "month", "year")
 WIDTH = 860
 HEIGHT = 280
 
@@ -66,7 +71,7 @@ def parse_selection(query: str) -> tuple[str, str, str]:
         if len(matches) != 1:
             raise ValueError("Unknown interface service")
         view = matches[0]
-    period = arguments.get("period", ["day"])[0]
+    period = arguments.get("period", ["4hour"])[0]
     fmt = arguments.get("format", ["html"])[0]
     if (view not in all_series() and not (not all_series() and "view" not in arguments and fmt == "html")) or period not in PERIODS or fmt not in ("html", "png"):
         raise ValueError("Invalid graph selection")
@@ -87,6 +92,11 @@ def style_and_legend(arguments: list[str], unit: str, series_units: dict | None 
         "--font", "LEGEND:9:DejaVu Sans Mono", "--border", "0",
         "--grid-dash", "1:0", "--alt-y-grid",
     ]
+    # Use one shared label width, including long mountpoint names.
+    labels = [match.group(1) for arg in result
+              if (match := re.match(r"LINE[12]:[a-zA-Z0-9_]+#[0-9A-Fa-f]+:(.*)", arg))
+              and match.group(1) and not match.group(1).startswith(":")]
+    label_width = max([24] + [len(label) + 1 for label in labels])
     output = []
     for arg in result:
         output.append(arg)
@@ -97,7 +107,7 @@ def style_and_legend(arguments: list[str], unit: str, series_units: dict | None 
         if not label or label.startswith(":"):
             continue  # Unlabelled drawing-only lines have no statistics.
         # Fixed label width keeps statistic columns aligned across legend rows.
-        output.append("COMMENT:" + " " * max(1, 24 - len(label)))
+        output.append("COMMENT:" + " " * max(1, label_width - len(label)))
         # Fault curves are scaled for drawing only. Statistics use original rates.
         source = name.removesuffix("_scaled")
         suffix = "" if name == "sample" else "_" + name
@@ -105,12 +115,11 @@ def style_and_legend(arguments: list[str], unit: str, series_units: dict | None 
                                      ("average", "AVERAGE"), ("maximum", "MAXIMUM")):
             output.append(f"VDEF:{statistic}{suffix}={source},{operation}")
         display_unit = (series_units or {}).get(name, "/s" if name.endswith("_scaled") else unit)
-        display_unit = display_unit.replace(":", r"\:").replace("%", "%%")
-        precision = 4 if display_unit == "/s" else 2
+        value_format = configured_catalog()['legend_format'](display_unit)
         for statistic, heading in (("latest", "Last"), ("minimum", "Min"),
                                    ("average", "Avg"), ("maximum", "Max")):
             ending = r"\l" if statistic == "maximum" else ""
-            output.append(f"GPRINT:{statistic}{suffix}:{heading}\\:%8.{precision}lf {display_unit}{ending}")
+            output.append(f"GPRINT:{statistic}{suffix}:{heading}\\:{value_format}{ending}")
     return output
 
 
@@ -123,6 +132,46 @@ def graph_command(view: str, period: str, root: Path = RRD_DIR, axis_scale=None)
         units[f"line{i}"] = line.get("unit", graph["unit"])
         units[f"line{i}_scaled"] = line.get("unit", graph["unit"])
     return style_and_legend(args, graph["unit"], units)
+
+
+def add_polling_tails(arguments: list[str], graph: dict, metrics: dict,
+                      root: Path, end: int) -> list[str]:
+    """Draw a dashed, bounded last-known-value tail without changing RRD data or statistics."""
+    overlays = []
+    for i, line in enumerate(graph['lines']):
+        references = [metrics[line['metric']]]
+        if 'subtract' in line:
+            references.append(metrics[line['subtract']])
+        intervals = [m.get('poll_interval_seconds') for m in references]
+        if not all(type(n) is int for n in intervals):
+            continue
+        interval = max(intervals)
+        # Never extend counters/rates: the last rate is not a valid current rate.
+        if any(m['type'] not in ('GAUGE', 'GAUGE_SIGNED') for m in references):
+            continue
+        try:
+            timestamps = []
+            for metric in references:
+                archive = configured_catalog()['archive_filename'](metric)
+                path = root / archive
+                last = subprocess.run(['/usr/bin/rrdtool', 'last', str(path)],
+                                      capture_output=True, text=True, timeout=5, check=True)
+                timestamps.append(int(last.stdout.strip()))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+        if not all(end - interval <= stamp <= end for stamp in timestamps):
+            continue
+        # PREV carries only the last defined plotted value. Limit drawing to
+        # the final polling window and never include it in VDEF statistics.
+        overlays.append((
+            f'CDEF:tailhold{i}=line{i},UN,PREV,line{i},IF',
+            f'CDEF:tail{i}=TIME,{end-interval},GE,line{i},UN,*,tailhold{i},UNKN,IF',
+            f'LINE1:tail{i}{line["color"]}::dashes=3,3'))
+    if not overlays:
+        return arguments
+    index = next(i for i, arg in enumerate(arguments) if arg.startswith('LINE'))
+    return (arguments[:index] + [item for hold, tail, _ in overlays for item in (hold, tail)]
+            + arguments[index:] + [line for _, _, line in overlays])
 
 
 def render_graph(view: str, period: str, root: Path = RRD_DIR,
@@ -153,12 +202,35 @@ def render_graph(view: str, period: str, root: Path = RRD_DIR,
         scale = right / left
         if not math.isfinite(scale) or scale <= 0:
             scale = 1.0
+        right_lines = [line for line in graph['lines'] if line.get('axis') == 'right']
+        metrics = catalog['load']()['metrics']
+        fault_axis = all(
+            line.get('unit', graph['unit']) in catalog['RATE_UNITS'] and
+            metrics[line['metric']]['type'] == 'COUNTER' and
+            line.get('scale', 1) > 0 and 'subtract' not in line
+            for line in right_lines)
+        right_values = [value for value, line in zip(values, graph['lines'])
+                        if line.get('axis') == 'right']
         arguments = graph_command(view, period, root, scale)
+        if fault_axis:
+            # Unknown counters are not zero. Hide only a completely measured
+            # zero-rate axis; leave all curve/legend definitions untouched.
+            if all(math.isfinite(value) and value == 0 for value in right_values):
+                for flag in ('--right-axis', '--right-axis-label', '--right-axis-format'):
+                    if flag in arguments:
+                        index = arguments.index(flag)
+                        del arguments[index:index + 2]
+            elif 'right_format' not in graph:
+                positive = [value for value in right_values if math.isfinite(value) and value > 0]
+                arguments += ['--right-axis-format', catalog['rate_axis_format'](max(positive, default=0))]
+
         apply_window(arguments, window)
         arguments[arguments.index("--end") + 1] = str(end)
     if any(line.get("bridge_gaps", False) for line in graph["lines"]):
         start = window[0] if window else end - PERIODS[period][1]
         arguments = add_gap_bridges(arguments, start, end, graph)
+    if window is None:
+        arguments = add_polling_tails(arguments, graph, catalog['load']()['metrics'], root, end)
     if details:
         arguments[1] = "graphv"
     proc = subprocess.run(arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -276,11 +348,11 @@ def listed_view(key: str) -> bool:
     return not configured_catalog()["load"]()["graphs"][key].get("hidden", False)
 
 
-def available_series() -> dict:
+def available_series(host: str = "") -> dict:
     # Reuse the renderer's archive checks, without starting RRDtool.
     result = {}
     for key, entry in all_series().items():
-        if not listed_view(key):
+        if (host and entry[1] != host) or not listed_view(key):
             continue
         try:
             graph_command(key, "day", RRD_DIR)
@@ -292,7 +364,7 @@ def available_series() -> dict:
 
 def navigation(view: str, period: str, window=None) -> str:
     host = all_series()[view][1]
-    choices = available_series()
+    choices = available_series(host)
     choices[view] = all_series()[view]
     options = "".join('<option value="{}"{}>{}</option>'.format(
         html.escape(key, quote=True), ' selected' if key == view else '', html.escape(entry[0]))
@@ -326,7 +398,7 @@ def zoom_links(view: str, period: str, window=None) -> str:
 
 
 def catalog_page(host: str, period: str) -> bytes:
-    available = available_series()
+    available = available_series(host)
     if host:
         items = [link(entry[0], view=key, period=period)
                  for key, entry in sorted(available.items(), key=lambda item: item[1][0].casefold())
@@ -347,7 +419,8 @@ def page(view: str, period: str, message: str = "", window=None, rendered=None) 
             html.escape(urlencode({"view": view, "period": key}), quote=True),
             ' aria-current="page"' if period == key else "",
             html.escape(label))
-        for key, (label, _) in PERIODS.items()
+        for key in PERIOD_CHOICES
+        for label, _ in (PERIODS[key],)
     )
     png_params = {"view": view, "period": period, "format": "png"}
     if window:
@@ -367,6 +440,7 @@ def page(view: str, period: str, message: str = "", window=None, rendered=None) 
     note = graph.get("note", "Gaps indicate unavailable measurements. Values are averaged over the selected period.")
     if any(line.get("bridge_gaps", False) for line in graph["lines"]):
         note += " Dotted lines visually bridge gaps and do not contribute to statistics."
+    note += " Dashed tails, when shown, indicate a recent last-known value rather than a new measurement."
     range_note = ""
     if window:
         range_note = '<p class="meta">' + " – ".join(
