@@ -2,9 +2,9 @@
 
 Install an administrator-owned `/etc/nagios-graphs/graphs.json`. Both the importer
 and CGI use it automatically. A site may instead select a generated catalog
-under `/var/lib/nagios-graphs/` using `NAGIOS_GRAPHS_CONFIG`. `NAGIOS_GRAPHS_CONFIG` selects an alternative path
-for tests or a second installation. A selected missing or invalid file fails
-closed; it never falls back to collecting legacy metrics. A configuration file is mandatory. There is no host-specific fallback.
+under `/var/lib/nagios-graphs/` using `NAGIOS_GRAPHS_CONFIG`. The same variable
+selects an isolated test configuration. A selected missing or invalid file fails
+closed; there is no built-in host catalog or legacy fallback.
 
 The version 1 format has `metrics`, `graphs` and an optional `nagios_url`
 (local URL path, default `/nagios4/`). See [the complete example](../examples/graphs.json).
@@ -22,12 +22,21 @@ strings matching Nagios perfdata. No wildcard collection is enabled.
 | `type` | `GAUGE` | `GAUGE` for nonnegative values, `GAUGE_SIGNED` for values including negatives, `COUNTER` for monotonic counters |
 | `heartbeat` | 1800 | Maximum seconds between measurements, 60–604800 |
 | `archive_service` | `service` | Original service description to retain an existing archive after a rename |
+| `poll_interval_seconds` | unset | Expected polling interval, 60–604800 seconds; permits a bounded dashed tail for gauges, without changing stored data or statistics |
+| `min_value`, `max_value` | sensor-specific | Optional explicit bounds in native gauge units or counter rates per second; see [bounds](install.md#metric-bounds-new-and-existing-archives) |
 
-Archive filenames remain the first 32 hexadecimal characters of SHA-256 of
-Python `json.dumps([host, archive_service, metric]).encode()`. Existing IDs are
-unchanged. Changing datatype or heartbeat does **not** migrate existing RRD files;
-plan those changes separately. Retention remains 1-minute/1-day, 5-minute/7-day,
-and hourly/1-year archives. Missing values stay unknown.
+Archive filenames use the readable policy in `scripts/rrd_names.py`:
+`<host>__<archive-service>__<metric>__<12-hex-digest>.rrd`. Each name part is
+ASCII-normalized, sanitized and limited to 64 characters. The digest uses the
+original, NUL-separated identity strings, so similarly sanitized names remain
+distinct. `archive_service` preserves identity when a service is renamed.
+
+The earlier 32-character SHA-256 filenames are legacy archive IDs retained for
+migration/audit helpers. The current importer and renderer use readable filenames;
+[coordinate their installation with archive migration](install.md#upgrade-existing-rrd-archives-to-readable-names).
+Changing datatype, heartbeat or bounds does not migrate existing RRD metadata.
+Retention remains 1-minute/1-day, 5-minute/7-day and hourly/1-year archives.
+Missing values stay unknown.
 
 ## Graphs
 
@@ -57,7 +66,8 @@ never fabricated zero; every graph must contain at least one required line.
 
 `bridge_gaps: true` overlays dotted interpolation between bounded measurements
 on a left-axis line. It never extrapolates or changes archives/statistics. Lines
-can set `width` to 1 or 2. Graphs can set `note`, `units_exponent`, `left_format`
+can set `width` to 1 or 2. Graphs can set `axis_label` (defaults to `unit`),
+`note`, `units_exponent`, `left_format`
 and `right_format` (format strings limited to `%.0lf` through `%.6lf`).
 
 ## Interface generation
@@ -172,3 +182,101 @@ discard alerting disabled. Graph error/discard rates are displayed per second.
 For isolated CLI/CGI tests, `NAGIOS_GRAPHS_RRD_DIR` selects the archive directory.
 These environment settings are administrator-controlled; request parameters never
 select files, configuration or external commands.
+
+### Shared numeric axis defaults
+
+Graphs expressed in kB/KB, MB, GB, TB, KiB, MiB, GiB, TiB, percent, W, load,
+Mbit/s, /s, Errors/s or Discards/s
+disable RRDtool's additional SI prefixes by default. For example, a GB graph
+shows `7000`, not `7 k`. Raw bytes (`B`) retain automatic prefix scaling.
+An explicit `units_exponent` overrides the default. This affects only display,
+not stored values, unit conversions or archive identities. Legend statistics
+retain their calculation; their formatting follows the unit as described below.
+
+Use the existing line `scale`, `unit` and `axis` fields for mixed-unit graphs.
+Keep import bounds in the source's native unit: a millivolt UPS datasource needs
+a maximum of `300000` where a volt datasource uses `300`. A graph line can
+convert millivolts to volts with `scale: 0.001`. Changing a catalog bound does
+not alter an existing RRD datasource; use the bounds tuning tool with a backup
+when applying a correction. Already missing historical samples are not recovered.
+
+## Time windows
+
+Graph pages and hover previews default to four hours. The toolbar offers common
+hourly windows plus day/week/month/year. Explicit `period=Nhour` or `Nhours`
+accepts 1–24 hours; `period=hour` remains supported. Custom zoom changes the
+requested display window, not archive resolution or retention.
+
+## Adaptive ranges and numeric labels
+
+Omit `left_format` to let RRDtool choose decimal precision from the visible range.
+Generated traffic graphs use this for both quiet and busy links, while their
+Mbit/s unit remains fixed. Set `autoscale: true` to derive axis bounds from the
+visible data (RRDtool `--alt-autoscale`), for example phase voltage. Single-axis
+percentage graphs with `lower: 0` use `--alt-autoscale-max`, keeping a zero
+baseline while adapting the upper range. Omit fixed
+lower/upper bounds when the range should be fully adaptive. A missing voltage
+measurement stays unknown; it must not be converted to a zero-voltage sample.
+
+### Explicit capacity for virtual interfaces
+
+Set `_GRAPH_MAX_BPS` on an interface service when SNMP reports zero speed but
+the reviewed physical capacity is known. The generator translates this into
+an octet-counter maximum in bytes/second with 5% measurement tolerance. For
+example, `1000000000` yields `131250000` bytes/s. Error/discard counters are
+unaffected. The same catalog bounds are used by the existing RRD tuning tool;
+regenerating a catalog alone does not tune existing files or repair old samples.
+
+
+### Interface fault counter limits
+
+Generated in/out error and discard metrics have minimum 0 and default maximum
+`2**31 / poll_interval_seconds` events/s (about 2,386,093/s at 15 minutes).
+These SNMP fault counters are Counter32 even when traffic uses Counter64.
+The half-counter-space guard rejects the near-`2**32 / interval` spikes caused
+by small counters resetting, without assuming that faults are limited to half
+the physical packet capacity. It is a heuristic: some resets remain below the
+limit, and genuine sustained high rates above it become unknown. A service can
+override it with a positive integer `_GRAPH_MAX_FAULTS_PPS` when needed.
+Traffic counter policy and archive identities remain unchanged.
+
+Existing RRD limits require explicit tuning; catalog deployment alone does not
+update their datasource bounds. `tune-rrd-bounds.py --interface-faults-only` previews
+only these four counter kinds. Applying additionally requires `--apply` and a
+new `--backup-dir`, with the importer stopped. The tool preserves historical
+samples, including existing spikes.
+
+
+### Legend formatting and axis precision
+
+One shared display policy in `nagios_graphs_config.py` defines defaults for
+all graphs using the same unit. Watts have integer legend statistics; raw bytes
+use automatic decimal SI prefixes with two decimals (940490463.64 B becomes
+940.49 MB). Rates in `/s`, `Errors/s` and `Discards/s` have four decimals; all
+other legend statistics retain two decimals. Average values are rounded for
+display only. Per-line units apply before right-axis drawing conversion.
+
+Generated interfaces rely on these unit defaults. Their traffic, right error/
+discard axis, and hidden fault graphs let RRDtool choose tick precision instead
+of imposing three or four decimals. Explicit `left_format`, `right_format` and
+`units_exponent` in administrator-owned catalogs still take precedence.
+
+Both interface discovery and other metric polling metadata use the same service
+template resolver: local properties override inherited ones, and earlier `use`
+templates take precedence. Fractional check intervals are converted from minutes
+to rounded whole seconds consistently (for example 1.5 minutes becomes 90
+seconds). The supported 60–604800 second range remains unchanged.
+
+
+### Quiet interface fault axes
+
+Automatic right axes containing only nonnegative COUNTER error/discard rates
+(`/s`, `Errors/s`, `Discards/s`) use ordinary numeric labels without SI prefixes.
+Precision follows the measured peak: 0.24/s uses two decimals, while 0.001/s
+uses four (up to six). An explicit `right_format` still overrides this default.
+
+When every right-hand series has a measured maximum of zero in the selected
+window, hide the right axis and its label. Keep the curves and their legend
+statistics. An unknown/missing series prevents hiding: absence is not zero.
+Fixed-ratio axes such as UPS voltage retain their existing behavior. Formatting
+uses the viewer's existing decimal separator; no locale change is introduced.

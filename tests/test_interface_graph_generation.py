@@ -29,6 +29,46 @@ class GenerationTests(unittest.TestCase):
                     "\n check_command check_int_noregex!$USER8$!'" + interface + "'\n}\n"
                     for interface, label in pairs))
 
+    def test_explicit_capacity_bounds_virtual_octet_counters_only(self):
+        self.services(('Port 1', 'WAN'))
+        self.config.write_text(self.config.read_text().replace('check_command check_int_noregex',
+            '_GRAPH_MAX_BPS 1000000000\n check_command check_int_noregex'))
+        rows = generator.generate(self.root, self.seed)
+        self.assertEqual(rows[0]['max_bps'], 1_000_000_000)
+        catalog = generator.catalog(dict(version=1, metrics=[], graphs=[]), rows)
+        for metric in catalog['metrics']:
+            if metric['metric'].endswith('_octet'):
+                self.assertEqual(metric['max_value'], 131_250_000)
+                self.assertEqual(metric['min_value'], 0)
+            else:
+                self.assertAlmostEqual(metric['max_value'], 2**31 / 900)
+                self.assertEqual(metric['min_value'], 0)
+        self.config.write_text(self.config.read_text().replace('1000000000', '-1'))
+        with self.assertRaisesRegex(ValueError, '_GRAPH_MAX_BPS'):
+            generator.generate(self.root, self.seed)
+
+    def test_fault_bounds_follow_interval_and_allow_explicit_override(self):
+        self.services(('Port 1', 'Uplink'))
+        rows = generator.generate(self.root, self.seed)
+        for interval in (60, 300, 900):
+            rows[0]['poll_interval_seconds'] = interval
+            data = generator.catalog(dict(version=1, metrics=[], graphs=[]), rows)
+            faults = [m for m in data['metrics'] if not m['metric'].endswith('_octet')]
+            self.assertEqual(len(faults), 4)
+            self.assertTrue(all(m['max_value'] == 2**31 / interval for m in faults))
+            # The synthetic 32-bit reset rate is above the bound; steady discards survive.
+            self.assertLess(40, faults[0]['max_value'])
+        self.assertLess(faults[0]['max_value'], 4_772_185)
+        self.config.write_text(self.config.read_text().replace('check_command check_int_noregex',
+            '_GRAPH_MAX_FAULTS_PPS 5000000\n check_command check_int_noregex'))
+        rows = generator.generate(self.root, self.seed)
+        data = generator.catalog(dict(version=1, metrics=[], graphs=[]), rows)
+        self.assertTrue(all(m['max_value'] == 5_000_000 for m in data['metrics']
+                            if not m['metric'].endswith('_octet')))
+        self.config.write_text(self.config.read_text().replace('5000000', '0'))
+        with self.assertRaisesRegex(ValueError, '_GRAPH_MAX_FAULTS_PPS'):
+            generator.generate(self.root, self.seed)
+
     def test_rename_add_delete_and_empty_catalog(self):
         self.services(("Port 1", "Old label"))
         first = generator.generate(self.root, self.seed)[0]
@@ -45,11 +85,61 @@ class GenerationTests(unittest.TestCase):
         self.services()
         self.assertEqual(generator.generate(self.root, self.seed), [])
 
+    def test_polling_interval_is_inherited_and_added_to_catalog(self):
+        self.services(('Port 1', 'Uplink'))
+        self.config.write_text(self.config.read_text().replace('process_perf_data 1',
+            'process_perf_data 1\n check_interval 15'))
+        rows = generator.generate(self.root, self.seed)
+        self.assertEqual(rows[0]['poll_interval_seconds'], 900)
+        intervals = generator.service_intervals(self.root)
+        self.assertEqual(intervals[('switch', 'Uplink')], 900)
+        base = dict(version=1, metrics=[dict(id='base', host='switch', service='Uplink',
+                                               metric='temp')], graphs=[])
+        data = generator.catalog(base, rows, intervals)
+        self.assertTrue(all(m['poll_interval_seconds'] == 900 for m in data['metrics']))
+
     def test_32bit_command_preserves_graph_identity(self):
         self.services(('Port 1', 'Uplink'))
         before = generator.generate(self.root, self.seed)
         self.config.write_text(self.config.read_text().replace('check_int_noregex!', 'check_int_32!'))
         self.assertEqual(generator.generate(self.root, self.seed), before)
+
+    def test_multiple_template_precedence_and_fractional_interval_are_shared(self):
+        self.services(('Port 1', 'Uplink'))
+        self.config.write_text(self.config.read_text().replace('use interface', 'use primary,secondary') +
+            'define service {\n name primary\n register 0\n use interface\n check_interval 1.5\n}\n' +
+            'define service {\n name secondary\n register 0\n check_interval 5\n}\n')
+        rows = generator.generate(self.root, self.seed)
+        self.assertEqual(rows[0]['poll_interval_seconds'], 90)
+        self.assertEqual(generator.service_intervals(self.root)[('switch', 'Uplink')], 90)
+        self.assertEqual(generator.catalog(dict(version=1, metrics=[], graphs=[]), rows)
+                         ['metrics'][0]['poll_interval_seconds'], 90)
+        self.config.write_text(self.config.read_text().replace('use interface\n check_interval',
+                                                               'use primary\n check_interval'))
+        for generate in (lambda: generator.generate(self.root, self.seed),
+                         lambda: generator.service_intervals(self.root)):
+            with self.assertRaisesRegex(ValueError, 'cyclic service template'):
+                generate()
+
+    def test_invalid_intervals_fail_consistently(self):
+        self.services(('Port 1', 'Uplink'))
+        source = self.config.read_text()
+        for value in ('NaN', 'inf', 'invalid', '0', '-1', '10081'):
+            self.config.write_text(source.replace('process_perf_data 1',
+                                   'process_perf_data 1\n check_interval ' + value))
+            for generate in (lambda: generator.generate(self.root, self.seed),
+                             lambda: generator.service_intervals(self.root)):
+                with self.assertRaisesRegex(ValueError, 'invalid check interval'):
+                    generate()
+
+    def test_generated_fault_axes_use_adaptive_precision(self):
+        self.services(('Port 1', 'Uplink'))
+        data = generator.catalog(dict(version=1, metrics=[], graphs=[]),
+                                 generator.generate(self.root, self.seed))
+        for graph in data['graphs']:
+            self.assertNotIn('left_format', graph)
+            self.assertNotIn('right_format', graph)
+            self.assertNotIn('units_exponent', graph)
 
     def test_duplicate_interface_rejected(self):
         self.services(("Port 1", "First"), ("Port 1", "Second"))

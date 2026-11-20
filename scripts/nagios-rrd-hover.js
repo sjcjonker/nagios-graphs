@@ -1,11 +1,11 @@
 /*
- * Show one-hour graph previews for allowlisted Nagios links.
+ * Show four-hour graph previews for allowlisted Nagios links.
  * Author: Stijn Jonker (sjcjonker) | https://github.com/sjcjonker
  * Usage: Load this script on authenticated Nagios pages with graphs.cgi action links.
  * Fetches same-origin graph images; hover displays previews and Escape hides them. No CLI help.
  * Nagios exit codes: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
  */
-/* Read-only one-hour graph preview for allowlisted Nagios action links. */
+/* Read-only four-hour graph preview for allowlisted Nagios action links. */
 (() => {
   "use strict";
   const graphPath = (window.NagiosGraphs && window.NagiosGraphs.path) || "/nagios4/cgi-bin/graphs.cgi";
@@ -26,7 +26,7 @@
 
   const tip = document.createElement("div");
   tip.setAttribute("role", "tooltip");
-  tip.setAttribute("aria-label", "Graph, last hour");
+  tip.setAttribute("aria-label", "Graph, last 4 hours");
   Object.assign(tip.style, {
     position: "fixed", zIndex: "2147483647", display: "none",
     background: "#fff", border: "1px solid #777", borderRadius: "5px",
@@ -34,7 +34,7 @@
     width: "min(760px, calc(100vw - 24px))", pointerEvents: "none"
   });
   const picture = document.createElement("img");
-  picture.alt = "Graph, last hour";
+  picture.alt = "Graph, last 4 hours";
   Object.assign(picture.style, {display: "block", width: "100%", height: "auto"});
   tip.appendChild(picture);
 
@@ -60,7 +60,7 @@
     hide();
     active = info.anchor;
     const url = new URL(info.url);
-    url.searchParams.set("period", "hour");
+    url.searchParams.set("period", "4hour");
     url.searchParams.set("format", "png");
     // Refresh cached previews; all images use the same CGI renderer as the page.
     url.searchParams.set("preview", String(Math.floor(Date.now() / 60000)));

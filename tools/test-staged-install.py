@@ -43,7 +43,7 @@ def stage(base):
     for directory in (lib, config, spool, rrd):
         directory.mkdir(parents=True, exist_ok=True)
     for name in ('nagios-rrd-seal.py', 'nagios-rrd-drain.py', 'nagios-rrd-import.py',
-                 'nagios_graphs_config.py', 'generate-interface-graphs.py', 'nagios-rrd-web.cgi',
+                 'nagios_graphs_config.py', 'rrd_names.py', 'generate-interface-graphs.py', 'nagios-rrd-web.cgi',
                  'check-nagios-graphs-spool.py'):
         copy(ROOT / 'scripts' / name, lib / name, 0o755 if name == 'check-nagios-graphs-spool.py' else 0o644)
     copy(ROOT / 'examples/graphs.json', config / 'base.json')

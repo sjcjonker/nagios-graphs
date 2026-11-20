@@ -5,6 +5,10 @@ import math
 import os
 from pathlib import Path
 import re
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rrd_names import filename as readable_rrd_filename
 
 DEFAULT_CONFIG = Path('/etc/nagios-graphs/graphs.json')
 _cache = None
@@ -33,13 +37,16 @@ def validate(data):
     for item in data.get('metrics', []):
         if not isinstance(item, dict):
             raise ValueError('Metric must be an object')
-        if set(item) - {'id', 'host', 'service', 'metric', 'type', 'heartbeat', 'archive_service'}:
+        if set(item) - {'id', 'host', 'service', 'metric', 'type', 'heartbeat', 'archive_service', 'poll_interval_seconds', 'min_value', 'max_value'}:
             raise ValueError('Unknown metric field')
         key = text(item.get('id'), 'metric id')
         identity = tuple(text(item.get(k), k) for k in ('host', 'service', 'metric'))
         archive_service = text(item.get('archive_service', identity[1]), 'archive service')
         kind = item.get('type', 'GAUGE')
         heartbeat = item.get('heartbeat', 1800)
+        interval = item.get('poll_interval_seconds')
+        if interval is not None and (type(interval) is not int or not 60 <= interval <= 604800):
+            raise ValueError('Invalid polling interval')
         if kind not in ('GAUGE', 'GAUGE_SIGNED', 'COUNTER'):
             raise ValueError('Invalid metric type')
         if type(heartbeat) is not int or not 60 <= heartbeat <= 604800:
@@ -47,7 +54,17 @@ def validate(data):
         if key in metrics or identity in identities:
             raise ValueError('Duplicate metric id or identity')
         archive = (identity[0], archive_service, identity[2])
-        contract = (kind, heartbeat)
+        lower = item.get('min_value', None)
+        upper = item.get('max_value', None)
+        if lower is not None:
+            number(lower)
+        if upper is not None:
+            number(upper)
+        if lower is not None and upper is not None and lower >= upper:
+            raise ValueError('Metric minimum must be below maximum')
+        if kind == 'COUNTER' and lower is not None and lower < 0:
+            raise ValueError('COUNTER rates cannot have a negative minimum')
+        contract = (kind, heartbeat, lower, upper)
         if archive in archives and archives[archive] != contract:
             raise ValueError('Conflicting archive types or heartbeat')
         archives[archive] = contract
@@ -56,7 +73,7 @@ def validate(data):
     for item in data.get('graphs', []):
         if not isinstance(item, dict):
             raise ValueError('Graph must be an object')
-        if set(item) - {'id', 'title', 'unit', 'lines', 'lower', 'upper', 'hidden', 'right_axis', 'note', 'units_exponent', 'left_format', 'right_format', 'axis_label'}:
+        if set(item) - {'id', 'title', 'unit', 'lines', 'lower', 'upper', 'hidden', 'right_axis', 'note', 'units_exponent', 'left_format', 'right_format', 'axis_label', 'autoscale'}:
             raise ValueError('Unknown graph field')
         key = text(item.get('id'), 'graph id')
         if not re.fullmatch(r'[A-Za-z0-9_.-]{1,120}', key) or key in graphs:
@@ -98,6 +115,8 @@ def validate(data):
                 text(line['unit'], 'line unit')
         if all(line.get('optional', False) for line in lines):
             raise ValueError('At least one required line is needed')
+        if type(item.get('autoscale', False)) is not bool:
+            raise ValueError('Invalid autoscale flag')
         if 'note' in item:
             text(item['note'], 'note')
         if 'units_exponent' in item and (type(item['units_exponent']) is not int or not -24 <= item['units_exponent'] <= 24):
@@ -152,6 +171,11 @@ def archive_id(metric):
     return hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:32]
 
 
+def archive_filename(metric):
+    """Single archive naming policy shared by importer and graph renderer."""
+    return readable_rrd_filename(metric['host'], metric['archive_service'], metric['metric'])
+
+
 def series():
     config = load()
     result = {}
@@ -165,6 +189,28 @@ def escape_label(value):
     return value.replace('\\', '\\\\').replace(':', r'\:')
 
 
+# Display policy is shared by graph axes and the CGI legend. Explicit catalog
+# axis settings still override it; unfamiliar units retain RRDtool defaults.
+FIXED_NUMERIC_UNITS = frozenset({
+    'kB', 'KB', 'MB', 'GB', 'TB', 'KiB', 'MiB', 'GiB', 'TiB', '%',
+    'W', 'load', 'Mbit/s', '/s', 'Errors/s', 'Discards/s',
+})
+RATE_UNITS = frozenset({'/s', 'Errors/s', 'Discards/s'})
+
+
+def legend_format(unit):
+    """Format displayed measurements, before any right-axis drawing conversion."""
+    precision = 0 if unit == 'W' else 4 if unit in RATE_UNITS else 2
+    printed_unit = '%sB' if unit == 'B' else escape_label(unit).replace('%', '%%')
+    return f'%8.{precision}lf {printed_unit}'
+
+
+def rate_axis_format(peak):
+    """Keep fractional rates numeric, with enough decimals for small values."""
+    precision = max(0, min(6, math.ceil(-math.log10(peak)) + 1)) if peak > 0 else 2
+    return f'%.{precision}lf'
+
+
 def graph_command(view, period_seconds, root, width, height, axis_scale=None):
     config = load()
     graph = config['graphs'][view]
@@ -172,11 +218,20 @@ def graph_command(view, period_seconds, root, width, height, axis_scale=None):
             '--start', f'end-{period_seconds}', '--end', 'now',
             '--width', str(width), '--height', str(height), '--slope-mode',
             '--title', graph['title'], '--vertical-label', graph.get('axis_label', graph['unit'])]
+    if graph.get('autoscale', False):
+        # Percent charts keep a meaningful zero while following the observed maximum.
+        args += ['--alt-autoscale-max' if graph['unit'] == '%' and graph.get('lower') == 0
+                 and not graph.get('right_axis') else '--alt-autoscale']
     for limit in ('lower', 'upper'):
         if limit in graph:
             args += [f'--{limit}-limit', str(graph[limit])]
-    if 'units_exponent' in graph:
-        args += ['--units-exponent', str(graph['units_exponent']), '--units-length', '8']
+    # Prefixes are useful for raw bytes (B), but misleading for values already
+    # expressed in MB/GB/GiB or percent. Explicit graph settings take precedence.
+    exponent = graph.get('units_exponent')
+    if exponent is None and graph['unit'] in FIXED_NUMERIC_UNITS:
+        exponent = 0
+    if exponent is not None:
+        args += ['--units-exponent', str(exponent), '--units-length', '8']
     for fmt in ('left_format', 'right_format'):
         if fmt in graph:
             args += ['--' + fmt.replace('_', '-').replace('format', 'axis-format'), graph[fmt]]
@@ -191,7 +246,7 @@ def graph_command(view, period_seconds, root, width, height, axis_scale=None):
     # Resolve all required archives first, including subtract operands.
     resolved = []
     for index, line in enumerate(graph['lines']):
-        paths = {key: root / (archive_id(config['metrics'][line[key]]) + '.rrd')
+        paths = {key: root / archive_filename(config['metrics'][line[key]])
                  for key in ('metric', 'subtract') if key in line}
         exists = all(path.is_file() for path in paths.values())
         if not exists and not line.get('optional', False):

@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
-    name: Minimal checks
+    name: Runtime and graph checks
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
@@ -49,13 +49,11 @@ jobs:
           node tests/test_nagios_rrd_drag.js
           node tests/test_nagios_rrd_hover.js
 
-      - name: Full runtime and real RRD release validation
-        if: github.event_name == 'workflow_dispatch'
+      - name: Full runtime and real RRD validation
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends rrdtool fonts-dejavu-core
           python3 -m unittest discover -s tests -v
 
       - name: Staged installation smoke test
-        if: github.event_name == 'workflow_dispatch'
         run: python3 tools/test-staged-install.py
