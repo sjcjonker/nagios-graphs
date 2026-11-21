@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Check the dedicated ext4 graph spool mount and free space.
 # Author: Stijn Jonker (sjcjonker) | https://github.com/sjcjonker
-# Usage: python3 scripts/check-nagios-graphs-spool.py --mount /var/spool/nagios-graphs
+# Usage: ./scripts/check-nagios-graphs-spool.py --mount /var/spool/nagios-graphs
 # Default free-space warning/critical: 20%/10%. Help: --help.
 # Nagios exit codes: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
 """Nagios check for the dedicated persistent graph spool mount and free space."""

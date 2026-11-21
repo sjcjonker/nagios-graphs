@@ -14,8 +14,8 @@ below run from the repository root. Review paths for other distributions.
 sudo apt-get install python3 rrdtool fonts-dejavu-core
 sudo install -d -o root -g root -m 0755 /usr/local/libexec /etc/nagios-graphs
 sudo install -d -o nagios -g nagios -m 0750 /var/spool/nagios-graphs /var/lib/nagios-graphs/rrd
-sudo install -m 0644 scripts/nagios-rrd-{seal,drain,import}.py scripts/nagios_graphs_config.py scripts/rrd_names.py scripts/generate-interface-graphs.py scripts/nagios-rrd-web.cgi /usr/local/libexec/
-sudo install -m 0755 scripts/check-nagios-graphs-spool.py /usr/local/libexec/
+sudo install -m 0644 scripts/rrd_names.py scripts/nagios_objects.py /usr/local/libexec/
+sudo install -m 0755 scripts/nagios-rrd-seal.py scripts/nagios-rrd-drain.py scripts/nagios-rrd-import.py scripts/nagios_graphs_config.py scripts/generate-interface-graphs.py scripts/nagios-rrd-web.cgi scripts/check-nagios-graphs-spool.py /usr/local/libexec/
 # New installation only: do not overwrite an existing configuration.
 sudo install -o root -g nagios -m 0640 examples/graphs.json /etc/nagios-graphs/graphs.json.example
 sudo cp -pn /etc/nagios-graphs/graphs.json.example /etc/nagios-graphs/graphs.json
@@ -24,7 +24,7 @@ sudo cp -pn /etc/nagios-graphs/graphs.json.example /etc/nagios-graphs/graphs.jso
 Edit the example to match real plugin output. Validate before enabling collection:
 
 ```sh
-sudo -u nagios python3 /usr/local/libexec/nagios_graphs_config.py /etc/nagios-graphs/graphs.json
+sudo -u nagios /usr/local/libexec/nagios_graphs_config.py /etc/nagios-graphs/graphs.json
 ```
 
 The live perfdata file and batches share the spool filesystem. A dedicated volume
@@ -101,6 +101,30 @@ must still be verified in the target installation.
 
 
 
+## Upgrade from v0.2.0
+
+From the v0.2.1 checkout, stop the timer and wait for any active drain
+to finish. Confirm the service is inactive before continuing.
+
+```sh
+sudo systemctl stop nagios-rrd-drain.timer
+systemctl is-active nagios-rrd-drain.service
+```
+
+When the service is inactive, replace the three collection scripts and the unit:
+
+```sh
+sudo install -m 0755 scripts/nagios-rrd-seal.py scripts/nagios-rrd-drain.py scripts/nagios-rrd-import.py /usr/local/libexec/
+sudo install -m 0644 systemd/nagios-rrd-drain.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl start nagios-rrd-drain.timer
+systemctl list-timers --all nagios-rrd-drain.timer
+```
+
+To switch the Nagios sealer command to direct execution, update that command
+from `examples/nagios.cfg` after installing the executable. Validate and reload
+Nagios. The existing catalog, queued batches and RRD archives stay in place.
+
 ## Upgrade from v0.1.0: migrate RRD filenames
 
 **Required for existing installations:** v0.1.0 uses hash-only filenames, while
@@ -126,13 +150,13 @@ sudo systemctl stop nagios-rrd-drain.service
 pgrep -af 'nagios-rrd-(import|drain)' || true
 
 # Review the plan, then make a verified, independent backup and rename.
-sudo python3 scripts/migrate-rrd-names.py --catalog /etc/nagios-graphs/graphs.json
-sudo python3 scripts/migrate-rrd-names.py --apply \
+sudo ./scripts/migrate-rrd-names.py --catalog /etc/nagios-graphs/graphs.json
+sudo ./scripts/migrate-rrd-names.py --apply \
   --catalog /etc/nagios-graphs/graphs.json \
   --backup-dir /var/backups/nagios-rrd-readable-$(date +%Y%m%d-%H%M%S)
 
 # Deploy the collector, graph renderer and shared helpers together.
-sudo install -m 0644 scripts/nagios-rrd-import.py scripts/nagios-rrd-web.cgi \
+sudo install -m 0755 scripts/nagios-rrd-import.py scripts/nagios-rrd-web.cgi \
   scripts/nagios_graphs_config.py scripts/rrd_names.py /usr/local/libexec/
 sudo systemctl start nagios-rrd-drain.timer
 ```
@@ -178,11 +202,11 @@ To preview and then tune existing archives using explicit catalog limits and
 the latest Nagios status perfdata (including interface speeds):
 
 ```sh
-sudo python3 scripts/tune-rrd-bounds.py --catalog /etc/nagios-graphs/graphs.json
+sudo ./scripts/tune-rrd-bounds.py --catalog /etc/nagios-graphs/graphs.json
 # Stop collection before applying, and inspect the dry-run first:
 sudo systemctl stop nagios-rrd-drain.timer
 sudo systemctl stop nagios-rrd-drain.service
-sudo python3 scripts/tune-rrd-bounds.py --catalog /etc/nagios-graphs/graphs.json --apply \
+sudo ./scripts/tune-rrd-bounds.py --catalog /etc/nagios-graphs/graphs.json --apply \
   --backup-dir /var/backups/nagios-rrd-bounds-$(date +%Y%m%d-%H%M%S)
 sudo systemctl start nagios-rrd-drain.timer
 ```

@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.1 (2026-11-21)
+
+### Security and maintenance
+
+- Start the drain service and its importer directly through their shebangs.
+- Restrict the drain service's writable paths to the spool and the RRD directory.
+- Install executable scripts with mode `0755` and exercise direct execution in the staged installation test.
+
+### Upgrade from v0.2.0
+
+Stop the drain timer and let the active run finish before replacing files. Install
+the sealer, drainer and importer with mode `0755`, then install the updated drain
+unit and reload systemd. The update keeps the existing catalog, spool and RRD
+archives. Follow the [upgrade guide](docs/install.md#upgrade-from-v020).
+
 ## v0.2.0 (2026-11-20)
 
 ### Upgrade requirement

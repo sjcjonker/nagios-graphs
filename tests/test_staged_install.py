@@ -2,7 +2,6 @@
 import json
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -14,7 +13,7 @@ class StagedInstallTests(unittest.TestCase):
     def test_layout_validates_copied_helpers_and_records_skipped_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory) / 'installation'
-            result = subprocess.run([sys.executable, str(SCRIPT), '--layout-only', '--output', str(base)],
+            result = subprocess.run([str(SCRIPT), '--layout-only', '--output', str(base)],
                                     cwd=directory, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             report = json.loads((base / 'report.json').read_text())
@@ -31,7 +30,7 @@ class StagedInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             marker = base / 'keep'; marker.write_text('keep this file')
-            result = subprocess.run([sys.executable, str(SCRIPT), '--layout-only', '--output', str(base)],
+            result = subprocess.run([str(SCRIPT), '--layout-only', '--output', str(base)],
                                     capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(marker.read_text(), 'keep this file')

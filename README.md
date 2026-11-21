@@ -22,6 +22,12 @@ An administrator-owned JSON catalog declares exact allowed metrics, archive iden
 graph lines, units, conversions, signed values, dual axes and gap overlays.
 Missing or invalid configuration fails closed; there is no built-in host catalog.
 
+## Release v0.2.1
+
+This maintenance release restricts the drain service's writable paths and
+runs the collection scripts directly. See the
+[upgrade instructions](docs/install.md#upgrade-from-v020) and [changelog](CHANGELOG.md).
+
 ## Release v0.2.0
 
 See [the release notes](CHANGELOG.md) for graph improvements and upgrade details.
@@ -49,7 +55,7 @@ See [interface plugins, command definitions and service examples](docs/configura
 for the required check setup.
 
 ```sh
-python3 scripts/generate-interface-graphs.py --config-dir /etc/nagios4 \
+./scripts/generate-interface-graphs.py --config-dir /etc/nagios4 \
   --catalog-base /etc/nagios4/graphs/base.json \
   --output /var/lib/nagios-graphs/catalog.json
 ```

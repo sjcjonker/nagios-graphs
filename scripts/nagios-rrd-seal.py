@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Atomically enqueue Nagios' closed perfdata file in the graph spool.
 # Author: Stijn Jonker (sjcjonker) | https://github.com/sjcjonker
-# Usage: python3 scripts/nagios-rrd-seal.py /path/to/closed-perfdata
+# Usage: ./scripts/nagios-rrd-seal.py /path/to/closed-perfdata
 # Invoke after Nagios closes the file; source and spool must share a filesystem. Help: --help.
 # Nagios exit codes: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
 """Seal Nagios' closed service-perfdata file into a bounded local spool.

@@ -8,7 +8,7 @@ live configuration or RRD history. Run it as a normal user without sudo.
 Requires Python 3.9+, RRDTool and its normal rendering/font dependencies:
 
 ```sh
-python3 tools/test-staged-install.py
+./tools/test-staged-install.py
 ```
 
 Run this from a checkout of the intended release commit. The script prints the
@@ -35,7 +35,7 @@ layout review; they are not activated or submitted to a running Nagios instance.
 ## Partial check without RRDTool
 
 ```sh
-python3 tools/test-staged-install.py --layout-only
+./tools/test-staged-install.py --layout-only
 ```
 
 This checks copying, generation and config validation. Its report explicitly says
