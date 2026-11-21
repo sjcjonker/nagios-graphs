@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Import sealed graph batches and retain failed batches for retry.
 # Author: Stijn Jonker (sjcjonker) | https://github.com/sjcjonker
-# Usage: python3 scripts/nagios-rrd-drain.py --spool /var/spool/nagios-graphs
+# Usage: ./scripts/nagios-rrd-drain.py --spool /var/spool/nagios-graphs
 # Run as the dedicated graph user; never rotates the live perfdata file. Help: --help.
 # Nagios exit codes: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
 """Process sealed Nagios performance-data batches, retaining failures for retry.
@@ -40,7 +40,7 @@ def drain(spool: Path, importer: Path, destination: Path, rrdtool: str) -> tuple
                 failures += 1
                 continue
             outcome = subprocess.run(
-                [sys.executable, str(importer), str(path), "--rrd-dir", str(destination)],
+                [str(importer), str(path), "--rrd-dir", str(destination)],
                 capture_output=True, text=True, timeout=120,
             )
             if outcome.returncode:

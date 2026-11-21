@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Validated, explicit graph catalog. Configuration is administrator-owned data."""
 import hashlib
 import json

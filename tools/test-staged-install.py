@@ -45,7 +45,7 @@ def stage(base):
     for name in ('nagios-rrd-seal.py', 'nagios-rrd-drain.py', 'nagios-rrd-import.py',
                  'nagios_graphs_config.py', 'rrd_names.py', 'generate-interface-graphs.py', 'nagios-rrd-web.cgi',
                  'check-nagios-graphs-spool.py'):
-        copy(ROOT / 'scripts' / name, lib / name, 0o755 if name == 'check-nagios-graphs-spool.py' else 0o644)
+        copy(ROOT / 'scripts' / name, lib / name, 0o755 if (ROOT / 'scripts' / name).stat().st_mode & 0o111 else 0o644)
     copy(ROOT / 'examples/graphs.json', config / 'base.json')
     copy(ROOT / 'examples/nagios.cfg', base / 'etc/nagios4/perfdata.cfg.example')
     copy(ROOT / 'scripts/nagios-rrd-hover.js', base / 'usr/share/nagios4/htdocs/rrd-hover.js')
@@ -68,9 +68,9 @@ def stage(base):
         " check_command check_int_32!unused!'eth0'\n process_perf_data 1\n}\n")
     env = dict(os.environ, PYTHONPATH='', XDG_CACHE_HOME=str(base / 'cache'), NAGIOS_GRAPHS_CONFIG=str(config / 'graphs.json'),
                NAGIOS_GRAPHS_RRD_DIR=str(rrd))
-    run([sys.executable, str(lib / 'generate-interface-graphs.py'), '--config-dir', str(fixture),
+    run([str(lib / 'generate-interface-graphs.py'), '--config-dir', str(fixture),
          '--catalog-base', str(config / 'base.json'), '--output', str(config / 'graphs.json')], base, env)
-    run([sys.executable, str(lib / 'nagios_graphs_config.py'), str(config / 'graphs.json')], base, env)
+    run([str(lib / 'nagios_graphs_config.py'), str(config / 'graphs.json')], base, env)
     return lib, config, spool, rrd, cgi, env
 
 
@@ -88,8 +88,8 @@ def exercise(base, lib, config, spool, rrd, cgi, env):
             f'eth0_out_octet={4000000 + i * 30000}c eth0_in_error={i}c eth0_out_error=0c '
             f'eth0_in_discard=0c eth0_out_discard=0c\n'])
     source.write_text(''.join(rows))
-    run([sys.executable, str(lib / 'nagios-rrd-seal.py'), str(source), '--spool', str(spool)], base, env)
-    drain = [sys.executable, str(lib / 'nagios-rrd-drain.py'), '--spool', str(spool),
+    run([str(lib / 'nagios-rrd-seal.py'), str(source), '--spool', str(spool)], base, env)
+    drain = [str(lib / 'nagios-rrd-drain.py'), '--spool', str(spool),
              '--importer', str(lib / 'nagios-rrd-import.py'), '--rrd-dir', str(rrd)]
     run(drain, base, env)
     if source.exists() or list(spool.glob('*.batch')):
@@ -103,13 +103,13 @@ def exercise(base, lib, config, spool, rrd, cgi, env):
     rendered = []
     for graph in data['graphs']:
         view = graph['id']
-        output = run([sys.executable, str(cgi)], base,
+        output = run([str(cgi)], base,
                      dict(env, QUERY_STRING=urlencode(dict(view=view, period='hour', format='png'))))
         headers, png = output.split(b'\r\n\r\n', 1)
         if not headers.startswith(b'Status: 200 OK') or not png.startswith(b'\x89PNG\r\n\x1a\n'):
             raise RuntimeError('Staged PNG failed: ' + view)
         (base / (view + '.png')).write_bytes(png)
-        html = run([sys.executable, str(cgi)], base,
+        html = run([str(cgi)], base,
                    dict(env, QUERY_STRING=urlencode(dict(view=view, period='hour'))))
         if not html.startswith(b'Status: 200 OK') or b'id="plot-select"' not in html:
             raise RuntimeError('Staged HTML/zoom metadata failed: ' + view)

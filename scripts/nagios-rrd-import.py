@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Import a sealed Nagios perfdata batch into bounded RRD archives.
 # Author: Stijn Jonker (sjcjonker) | https://github.com/sjcjonker
-# Usage: python3 scripts/nagios-rrd-import.py /path/to/sealed-batch --rrd-dir /var/lib/nagios-graphs/rrd
+# Usage: ./scripts/nagios-rrd-import.py /path/to/sealed-batch --rrd-dir /var/lib/nagios-graphs/rrd
 # Requires RRDTool; input is epoch, host, service and perfdata separated by tabs. Help: --help.
 # Nagios exit codes: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
 """Import selected Nagios service perfdata into bounded RRD files.
